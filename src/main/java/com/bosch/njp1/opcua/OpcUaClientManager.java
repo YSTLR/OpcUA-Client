@@ -1,7 +1,6 @@
-package com.bosch.njp1;
+package com.bosch.njp1.opcua;
 
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
-import org.eclipse.milo.opcua.sdk.client.api.subscriptions.*;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 
 public class OpcUaClientManager {

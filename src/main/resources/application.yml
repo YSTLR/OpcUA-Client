@@ -5,16 +5,21 @@ opc-ua:
     username: OPCUA
     password: 123456
   client:
-    name-space: 2
+    namespace: 2
     application-name: OpcUaClientPool
     application-uri: urn:yst:client-pool
     request-timeout-millis: 60000
+    hot-data:
+      hot-data-check-window-minutes: 1
+      hot-data-threshold: 1
   pool:
-      core-size: 20
-      max-size: 80
+      core-size: 4
+      max-size: 8
       max-idle-minutes: 5
       cleanup-interval-minutes: 5
+      borrow-timeout-millis: 60000
+      subscribe-core-size: 4
 http-server:
     port: 6111
-    read-url:
-    write-url:
+    read-url: /App/Get
+    write-url: /App/Set

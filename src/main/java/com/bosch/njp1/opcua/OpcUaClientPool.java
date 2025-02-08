@@ -1,5 +1,6 @@
-package com.bosch.njp1.pool;
+package com.bosch.njp1.opcua;
 
+import com.google.common.hash.Hashing;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.sdk.client.api.config.OpcUaClientConfig;
 import org.eclipse.milo.opcua.stack.client.DiscoveryClient;
@@ -33,6 +34,7 @@ public class OpcUaClientPool {
     private final String endpointUrl;
     private final ScheduledExecutorService cleanupScheduler;
 
+
     private static class IdleClient {
         final OpcUaClient client;
         volatile long lastUsedTime;
@@ -41,23 +43,6 @@ public class OpcUaClientPool {
             this.client = client;
             this.lastUsedTime = System.currentTimeMillis();
         }
-    }
-
-    @Override
-    public String toString() {
-        return "OpcUaClientPool{" +
-                "applicationName='" + applicationName + '\'' +
-                ", applicationUri='" + applicationUri + '\'' +
-                ", requestTimeoutMillis=" + requestTimeoutMillis +
-                ", pool=" + pool +
-                ", currentPoolSize=" + currentPoolSize +
-                ", corePoolSize=" + corePoolSize +
-                ", maxPoolSize=" + maxPoolSize +
-                ", maxIdleTimeMinutes=" + maxIdleTimeMinutes +
-                ", cleanupIntervalMinutes=" + cleanupIntervalMinutes +
-                ", endpointUrl='" + endpointUrl + '\'' +
-                ", cleanupScheduler=" + cleanupScheduler +
-                '}';
     }
 
     public static OpcUaClientPool getInstance(int corePoolSize, int maxPoolSize, int maxIdleTimeMinutes, int cleanupIntervalMinutes, String endpointUrl, String applicationName, String applicationUri, int requestTimeoutMillis) {
@@ -101,7 +86,7 @@ public class OpcUaClientPool {
             pool.offer(new IdleClient(createClient()));
             currentPoolSize.incrementAndGet();
         }
-
+        System.out.println("已创建核心线程池，数量等于 " + currentPoolSize.get());
         // 定期清理空闲客户端
         scheduleIdleClientCleanup();
     }
