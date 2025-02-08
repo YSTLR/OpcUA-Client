@@ -4,6 +4,7 @@ import com.bosch.njp1.config.ApplicationConfig;
 import com.bosch.njp1.config.ConfigLoader;
 import com.bosch.njp1.opcua.OpcUaClientPool;
 import com.bosch.njp1.opcua.OpcUaSubscribeClientPool;
+import com.bosch.njp1.redis.Redis;
 import com.bosch.njp1.server.ReadServer;
 
 
@@ -28,7 +29,19 @@ public class ClientApplication {
                 config.opcUa.client.applicationUri,
                 config.opcUa.client.requestTimeoutMillis
         );
-        ReadServer readServer = new ReadServer(pool, opcUaSubscribeClientPool, config);
+
+        Redis redis = new Redis(
+                config.redis.host,
+                config.redis.port,
+                config.redis.password,
+                config.redis.timeoutMillis,
+                config.redis.maxTotal,
+                config.redis.maxIdle,
+                config.redis.minIdle
+
+        );
+
+        ReadServer readServer = new ReadServer(pool, opcUaSubscribeClientPool, redis, config);
         readServer.start();
     }
 }

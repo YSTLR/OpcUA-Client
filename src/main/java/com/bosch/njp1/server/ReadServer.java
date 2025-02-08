@@ -4,6 +4,7 @@ import com.bosch.njp1.config.ApplicationConfig;
 import com.bosch.njp1.opcua.NodeAccessMonitor;
 import com.bosch.njp1.opcua.OpcUaClientPool;
 import com.bosch.njp1.opcua.OpcUaSubscribeClientPool;
+import com.bosch.njp1.redis.Redis;
 import com.bosch.njp1.util.ApplicationUtil;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
@@ -14,7 +15,6 @@ import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
 
-import javax.xml.soap.Node;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -27,12 +27,16 @@ public class ReadServer {
 
     private final NodeAccessMonitor monitor;
 
-    public ReadServer(OpcUaClientPool clientPool, OpcUaSubscribeClientPool subscribeClientPool, ApplicationConfig config) {
+    private final Redis redis;
+
+    public ReadServer(OpcUaClientPool clientPool, OpcUaSubscribeClientPool subscribeClientPool, Redis redis, ApplicationConfig config) {
         this.clientPool = clientPool;
         this.config = config;
+        this.redis = redis;
         this.monitor = new NodeAccessMonitor(
                 config,
-                subscribeClientPool
+                subscribeClientPool,
+                redis
         );
     }
 
@@ -46,10 +50,10 @@ public class ReadServer {
                     .channel(NioServerSocketChannel.class)
                     .childHandler(new ChannelInitializer() {
                         @Override
-                        protected void initChannel(Channel channel) throws Exception {
+                        protected void initChannel(Channel channel){
                             channel.pipeline().addLast(new HttpServerCodec());
                             channel.pipeline().addLast(new HttpObjectAggregator(65536));
-                            channel.pipeline().addLast(new HttpRequestHandler(clientPool, config, monitor));
+                            channel.pipeline().addLast(new HttpRequestHandler(clientPool, config, monitor, redis));
                         }
                     });
 
@@ -66,15 +70,17 @@ public class ReadServer {
         private final OpcUaClientPool clientPool;
         private final ApplicationConfig config;
         private final NodeAccessMonitor monitor;
+        private final Redis redis;
 
-        public HttpRequestHandler(OpcUaClientPool clientPool, ApplicationConfig config, NodeAccessMonitor monitor) {
+        public HttpRequestHandler(OpcUaClientPool clientPool, ApplicationConfig config, NodeAccessMonitor monitor, Redis redis) {
             this.clientPool = clientPool;
             this.config = config;
             this.monitor = monitor;
+            this.redis = redis;
         }
 
         @Override
-        protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) throws Exception {
+        protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request){
             if (!request.method().equals(HttpMethod.GET)) {
                 sendResponse(ctx, "{\"error\": \"Only GET methods are supported\"}", HttpResponseStatus.METHOD_NOT_ALLOWED);
                 return;
@@ -107,18 +113,24 @@ public class ReadServer {
                 return;
             }
             try {
+                //监视器监控节点访问
+                monitor.recordTagAccess(group, key);
+                String redisValue = redis.read(group + "." + key);
+                if(redisValue!=null){
+                    sendResponse(ctx, redisValue);
+                    return;
+                }
+
                 OpcUaClient client = clientPool.borrowClient(config.opcUa.pool.borrowTimeoutMillis, TimeUnit.MILLISECONDS);
                 NodeId nodeId = NodeId.parse(ApplicationUtil.parseNodeParam(String.valueOf(config.opcUa.client.namespace), group, key));
-
-                //监视器监控节点访问
-                monitor.recordTagAccess(config, group, key);
 
                 // 异步读取节点值
                 CompletableFuture<DataValue> future = client.readValue(0, org.eclipse.milo.opcua.stack.core.types.enumerated.TimestampsToReturn.Both, nodeId);
 
                 future.thenAccept(value -> {
                     if (value.getStatusCode().isGood()) {
-                        sendResponse(ctx, "{\"value\": \"" + value.getValue() + "\"}");
+                        System.out.println(value.getValue());
+                        sendResponse(ctx, value.getValue().getValue().toString());
                     } else {
                         sendResponse(ctx, "{\"error\": \"Failed to read node value\", \"status\": \"" + value.getStatusCode() + "\"}",
                                 HttpResponseStatus.INTERNAL_SERVER_ERROR);

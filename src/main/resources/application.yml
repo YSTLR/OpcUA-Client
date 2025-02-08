@@ -13,8 +13,8 @@ opc-ua:
       hot-data-check-window-minutes: 1
       hot-data-threshold: 1
   pool:
-      core-size: 4
-      max-size: 8
+      core-size: 32
+      max-size: 64
       max-idle-minutes: 5
       cleanup-interval-minutes: 5
       borrow-timeout-millis: 60000
@@ -23,3 +23,11 @@ http-server:
     port: 6111
     read-url: /App/Get
     write-url: /App/Set
+redis:
+    host: 10.177.241.69
+    port: 6379
+    password: 12345678
+    timeout-millis: 2000
+    max-total: 128
+    max-idle: 32
+    min-idle: 8

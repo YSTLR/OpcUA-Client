@@ -1,6 +1,7 @@
 package com.bosch.njp1.opcua;
 
 import com.bosch.njp1.config.ApplicationConfig;
+import com.bosch.njp1.redis.Redis;
 import com.bosch.njp1.util.ApplicationUtil;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.sdk.client.api.subscriptions.UaMonitoredItem;
@@ -15,10 +16,8 @@ import org.eclipse.milo.opcua.stack.core.types.structured.MonitoredItemCreateReq
 import org.eclipse.milo.opcua.stack.core.types.structured.MonitoringParameters;
 import org.eclipse.milo.opcua.stack.core.types.structured.ReadValueId;
 
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -35,25 +34,26 @@ public class NodeAccessMonitor {
     private final Set<String> currentSubscriptions = ConcurrentHashMap.newKeySet();
     private static final AtomicLong clientHandleCounter = new AtomicLong(1L);
     private static final ConcurrentLinkedQueue<UInteger> recycledHandles = new ConcurrentLinkedQueue<>();
+    private final Redis redis;
 
 
-    public NodeAccessMonitor(ApplicationConfig config, OpcUaSubscribeClientPool subscribeClientsPool) {
+    public NodeAccessMonitor(ApplicationConfig config, OpcUaSubscribeClientPool subscribeClientsPool, Redis redis) {
         this.config = config;
         this.subscribeClientsPool = subscribeClientsPool;
+        this.redis = redis;
         scheduler.scheduleAtFixedRate(this::checkHotTags, config.opcUa.client.hotData.hotDataThreshold, config.opcUa.client.hotData.hotDataCheckWindowMinutes, TimeUnit.MINUTES);
     }
 
-    public void recordTagAccess(ApplicationConfig config, String group, String key) {
-        String nodeParam = ApplicationUtil.parseNodeParam(String.valueOf(config.opcUa.client.namespace), group, key);
-        int count = tagAccessCount.computeIfAbsent(nodeParam, k -> new AtomicInteger(0)).incrementAndGet();
-        System.out.println("recordTagAccess " + nodeParam + ": " + count);
+    public void recordTagAccess(String group, String key) {
+        int count = tagAccessCount.computeIfAbsent(group+"."+key, k -> new AtomicInteger(0)).incrementAndGet();
+        System.out.println("recordTagAccess " + group+"."+key + ": " + count);
     }
 
     private void checkHotTags() {
         System.out.println("---开始检查热点数据---");
         int hotDataThreshold = config.opcUa.client.hotData.hotDataThreshold;
 
-        // 1. 扫描访问计数，更新热点数据列表
+        // 扫描访问计数，更新热点数据列表
         tagAccessCount.forEach((tag, count) -> {
             if (count.get() >= hotDataThreshold) {
                 System.out.println("热点数据：" + tag + " 访问次数：" + count.get() + " ,加入热点数据列表");
@@ -65,29 +65,28 @@ public class NodeAccessMonitor {
             // 重置计数器
             count.set(0);
         });
-        // 2. 取消不再是热点的数据订阅
+        // 取消不再是热点的数据订阅，并删除redis键值对
         for (String currentTag : currentSubscriptions) {
+            System.out.println("currentTag--"+currentTag);
             if (!hotTags.contains(currentTag)) {
                 unsubscribeTag(currentTag);
                 currentSubscriptions.remove(currentTag);
+                redis.delete(currentTag);
             }
         }
-        // 3. 订阅新的热点数据
+        // 订阅新的热点数据
         for (String tag : hotTags) {
             if (!currentSubscriptions.contains(tag)) {
                 subscribeTag(tag);
                 currentSubscriptions.add(tag);
             }
         }
-        // 4. 检查并重置 `clientHandleCounter`（适当调整检查频率）
+        // 检查并重置
         if (clientHandleCounter.get() > 10000L) {
             clientHandleCounter.set(1L);
             recycledHandles.clear();
+            tagAccessCount.clear();
         }
-    }
-
-    public boolean isHotTag(String tag) {
-        return hotTags.contains(tag);
     }
 
     public void shutdown() {
@@ -106,12 +105,9 @@ public class NodeAccessMonitor {
         return (handle != null) ? handle : UInteger.valueOf(clientHandleCounter.getAndIncrement());
     }
 
-    private static void recycleClientHandle(UInteger handle) {
-        recycledHandles.offer(handle);
-    }
-
     private void onDataChanged(UaMonitoredItem item, DataValue value) {
         System.out.println(item.getMonitoredItemId() + "-" + item.getReadValueId() + " Value changed: " + value.getValue().getValue());
+        redis.write(item.getReadValueId().getNodeId().getIdentifier().toString(), value.getValue().getValue().toString());
     }
 
     private void subscribeTag(String tag) {
@@ -119,7 +115,7 @@ public class NodeAccessMonitor {
         try {
             OpcUaClient client = subscribeClientsPool.getClient(tag);
             UaSubscription subscription = client.getSubscriptionManager().createSubscription(500.0).get();
-            ReadValueId readValueId = new ReadValueId(NodeId.parse(ApplicationUtil.parseNodeParam(ns, tag)), AttributeId.Value.uid(), null, null);
+            ReadValueId readValueId = new ReadValueId(NodeId.parse(ApplicationUtil.parseNodeParam(ns,tag)), AttributeId.Value.uid(), null, null);
             MonitoringParameters parameters = new MonitoringParameters(
                     getRecycledOrNewClientHandle(), 1000.0, null, UInteger.valueOf(1), true);
 
@@ -137,9 +133,7 @@ public class NodeAccessMonitor {
                         System.out.println("Setting value consumer for item: " + item.getReadValueId());
                         item.setValueConsumer(this::onDataChanged);
                     }
-            ).thenAccept(items -> {
-                items.forEach(monitoredItem -> System.out.println("Item created for nodeId=" + monitoredItem.getReadValueId().getNodeId()));
-            }).exceptionally(e -> {
+            ).thenAccept(items -> items.forEach(monitoredItem -> System.out.println("Item created for nodeId=" + monitoredItem.getReadValueId().getNodeId()))).exceptionally(e -> {
                 e.printStackTrace();
                 return null;
             });

@@ -10,6 +10,23 @@ public class ApplicationConfig {
     @JsonProperty("http-server")
     public HttpServer httpServer;
 
+    @JsonProperty("redis")
+    public Redis redis;
+
+    public static class Redis{
+        public String host;
+        public int port;
+        public String password;
+        @JsonProperty("timeout-millis")
+        public int timeoutMillis;
+        @JsonProperty("max-total")
+        public int maxTotal;
+        @JsonProperty("max-idle")
+        public int maxIdle;
+        @JsonProperty("min-idle")
+        public int minIdle;
+    }
+
     public static class OpcUa {
         public Server server;
         public Client client;
