@@ -1,48 +1,31 @@
 package com.bosch.njp1.opcua;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.hash.Hashing;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.sdk.client.api.config.OpcUaClientConfig;
-import org.eclipse.milo.opcua.sdk.client.api.subscriptions.UaSubscription;
 import org.eclipse.milo.opcua.stack.client.DiscoveryClient;
 import org.eclipse.milo.opcua.stack.core.security.SecurityPolicy;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
 
 
 public class OpcUaSubscribeClientPool {
-
+    private static final Logger logger = LoggerFactory.getLogger(OpcUaSubscribeClientPool.class);
     private OpcUaSubscribeClientPool obj = null;
-    private List<OpcUaClient> subscribeClients;
+    private final List<OpcUaClient> subscribeClients;
 
     private final String applicationName;
     private final String applicationUri;
     private final int requestTimeoutMillis;
     private final String endpointUrl;
     private final int subscribeCoreSize;
-
-
-    public void clearSubscribe(){
-        for(OpcUaClient client: subscribeClients){
-            ImmutableList<UaSubscription> subscriptions = client.getSubscriptionManager().getSubscriptions();
-            for(UaSubscription uaSubscription: subscriptions){
-                try {
-                    CompletableFuture<UaSubscription> future = client.getSubscriptionManager().deleteSubscription(uaSubscription.getSubscriptionId());
-                    future.get();
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            }
-        }
-    }
 
     public OpcUaClient getClient(String tag) {
         if (subscribeClients == null || subscribeClients.isEmpty()) {
@@ -83,7 +66,7 @@ public class OpcUaSubscribeClientPool {
         while (subscribeClients.size() < subscribeCoreSize) {
             subscribeClients.add(createClient());
         }
-        System.out.println("已创建订阅线程池，数量等于 " + subscribeClients.size());
+        logger.info("Subscribe clients pool has been created, pool size is {} ",subscribeClients.size());
     }
 
     private OpcUaClient createClient() {
@@ -115,6 +98,18 @@ public class OpcUaSubscribeClientPool {
         } catch (Exception e) {
             throw new RuntimeException("Failed to create OPC UA client", e);
         }
+    }
+
+    public void shutdown() {
+        for (OpcUaClient client:subscribeClients) {
+            try {
+                client.disconnect().get();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        subscribeClients.clear();
+        logger.info("Shut down OPC UA subscribe client pool...");
     }
 
 }

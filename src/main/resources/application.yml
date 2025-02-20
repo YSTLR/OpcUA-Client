@@ -1,33 +1,40 @@
 opc-ua:
   server:
-    endpoint: opc.tcp://10.177.241.72:49320
+    endpoint: opc.tcp://10.177.241.73:49320
     security-policy: none
     username: OPCUA
     password: 123456
   client:
     namespace: 2
     application-name: OpcUaClientPool
-    application-uri: urn:yst:client-pool
+    application-uri: urn:yst:client
     request-timeout-millis: 60000
     hot-data:
       hot-data-check-window-minutes: 1
-      hot-data-threshold: 1
+      hot-data-threshold: 10
+      requested-publishing-interval-millis: 500
+      sampling-interval-millis: 500
   pool:
-      core-size: 32
-      max-size: 64
+      core-size: 16
+      max-size: 128
       max-idle-minutes: 5
       cleanup-interval-minutes: 5
       borrow-timeout-millis: 60000
       subscribe-core-size: 4
 http-server:
-    port: 6111
+    port: 6112
     read-url: /App/Get
     write-url: /App/Set
 redis:
-    host: 10.177.241.69
+    host: 127.0.0.1
     port: 6379
-    password: 12345678
+    password: 123456
     timeout-millis: 2000
     max-total: 128
     max-idle: 32
     min-idle: 8
+database:
+    username: njmes
+    password: Pw#123456789
+    url: jdbc:sqlserver://10.177.241.99:1433;databasename=DB_NJMES_SQL;useSSL=false;trustServerCertificate=true;
+    init-sql: SELECT * FROM NJP1_TEF_I40_KepWare_Item

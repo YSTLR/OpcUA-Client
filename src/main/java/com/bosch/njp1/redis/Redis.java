@@ -9,7 +9,9 @@ public class Redis {
     private final JedisPool jedisPool;
 
     public Redis(String host, int port, String password, int timeout,int maxTotal,int maxIdle,int minIdle) {
+        //初始化连接池
         this.jedisPool = new JedisPool(buildPoolConfig(maxTotal,maxIdle,minIdle), host, port,timeout,password);
+
     }
 
     // 配置连接池
@@ -43,6 +45,11 @@ public class Redis {
         try (Jedis jedis = jedisPool.getResource()) {
             jedis.del(key);
         }
+    }
+
+    //shutdown
+    public void shutdown() throws InterruptedException {
+        jedisPool.getResource().flushDB();
     }
 
 }

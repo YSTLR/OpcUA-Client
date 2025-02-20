@@ -13,6 +13,9 @@ public class ApplicationConfig {
     @JsonProperty("redis")
     public Redis redis;
 
+    @JsonProperty("database")
+    public Database database;
+
     public static class Redis{
         public String host;
         public int port;
@@ -56,6 +59,10 @@ public class ApplicationConfig {
                 public int hotDataCheckWindowMinutes;
                 @JsonProperty("hot-data-threshold")
                 public int hotDataThreshold;
+                @JsonProperty("requested-publishing-interval-millis")
+                public double requestedPublishingIntervalMillis;
+                @JsonProperty("sampling-interval-millis")
+                public double samplingIntervalMillis;
             }
         }
 
@@ -81,5 +88,15 @@ public class ApplicationConfig {
         public String readUrl;
         @JsonProperty("write-url")
         public String writeUrl;
+    }
+
+
+    public static class Database{
+        public String url;
+        @JsonProperty("username")
+        public String userName;
+        public String password;
+        @JsonProperty("init-sql")
+        public String initSql;
     }
 }

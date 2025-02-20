@@ -8,7 +8,10 @@ import org.eclipse.milo.opcua.stack.core.security.SecurityPolicy;
 import org.eclipse.milo.opcua.stack.core.types.builtin.LocalizedText;
 import org.eclipse.milo.opcua.stack.core.types.builtin.unsigned.UInteger;
 import org.eclipse.milo.opcua.stack.core.types.structured.EndpointDescription;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -19,7 +22,7 @@ import java.util.concurrent.Executors;
 
 
 public class OpcUaClientPool {
-
+    private static final Logger logger = LoggerFactory.getLogger(OpcUaClientPool.class);
     private static OpcUaClientPool obj = null;
 
     private final String applicationName;
@@ -56,14 +59,7 @@ public class OpcUaClientPool {
         return obj;
     }
 
-    private OpcUaClientPool(int corePoolSize,
-                            int maxPoolSize,
-                            int maxIdleTimeMinutes,
-                            int cleanupIntervalMinutes,
-                            String endpointUrl,
-                            String applicationName,
-                            String applicationUri,
-                            int requestTimeoutMillis) {
+    private OpcUaClientPool(int corePoolSize, int maxPoolSize, int maxIdleTimeMinutes, int cleanupIntervalMinutes, String endpointUrl, String applicationName, String applicationUri, int requestTimeoutMillis) {
         //初始化基础参数
         this.corePoolSize = corePoolSize;
         this.maxPoolSize = maxPoolSize;
@@ -86,7 +82,7 @@ public class OpcUaClientPool {
             pool.offer(new IdleClient(createClient()));
             currentPoolSize.incrementAndGet();
         }
-        System.out.println("已创建核心线程池，数量等于 " + currentPoolSize.get());
+        logger.info("Clients core pool of thread has been created, pool size is {} ", currentPoolSize.get());
         // 定期清理空闲客户端
         scheduleIdleClientCleanup();
     }
@@ -100,18 +96,10 @@ public class OpcUaClientPool {
                 throw new RuntimeException("Endpoint (" + endpointUrl + ") is not available");
             }
             // 选择一个合适的端点（可以按安全策略或其他条件筛选）
-            EndpointDescription endpoint = endpoints.stream()
-                    .filter(e -> e.getSecurityPolicyUri().equals(SecurityPolicy.None.getUri()))
-                    .findFirst()
-                    .orElseThrow(() -> new RuntimeException("No suitable endpoint found."));
+            EndpointDescription endpoint = endpoints.stream().filter(e -> e.getSecurityPolicyUri().equals(SecurityPolicy.None.getUri())).findFirst().orElseThrow(() -> new RuntimeException("No suitable endpoint found."));
 
             //构建客户端配置对象
-            OpcUaClientConfig config = OpcUaClientConfig.builder()
-                    .setApplicationName(LocalizedText.english(applicationName))
-                    .setApplicationUri(applicationUri)
-                    .setEndpoint(endpoint)
-                    .setRequestTimeout(UInteger.valueOf(requestTimeoutMillis))
-                    .build();
+            OpcUaClientConfig config = OpcUaClientConfig.builder().setApplicationName(LocalizedText.english(applicationName)).setApplicationUri(applicationUri).setEndpoint(endpoint).setRequestTimeout(UInteger.valueOf(requestTimeoutMillis)).build();
 
             //创建并返回新的客户端
             OpcUaClient client = OpcUaClient.create(config);
@@ -159,7 +147,7 @@ public class OpcUaClientPool {
 
     private void scheduleIdleClientCleanup() {
 
-        System.out.println("Start cleanup pool resource...");
+        logger.info("Start cleanup pool resource...");
         cleanupScheduler.scheduleAtFixedRate(() -> {
             long currentTime = System.currentTimeMillis();
 
@@ -171,9 +159,10 @@ public class OpcUaClientPool {
                     try {
                         idleClient.client.disconnect().get();
                         currentPoolSize.decrementAndGet();
-                        System.out.println("Closed idle client.");
+                        logger.info("Closed idle client.");
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        logger.error(e.getMessage());
+                        logger.error(Arrays.toString(e.getStackTrace()));
                     }
                     return true;  // 从池中移除客户端
                 }
@@ -187,10 +176,12 @@ public class OpcUaClientPool {
             try {
                 idleClient.client.disconnect().get();
             } catch (Exception e) {
-                e.printStackTrace();
+                logger.error(e.getMessage());
+                logger.error(Arrays.toString(e.getStackTrace()));
             }
         }
         pool.clear();
         currentPoolSize.set(0);
+        logger.info("Shut down OPC UA client pool...");
     }
 }

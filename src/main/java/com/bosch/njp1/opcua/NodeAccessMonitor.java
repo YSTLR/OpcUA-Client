@@ -15,7 +15,10 @@ import org.eclipse.milo.opcua.stack.core.types.enumerated.TimestampsToReturn;
 import org.eclipse.milo.opcua.stack.core.types.structured.MonitoredItemCreateRequest;
 import org.eclipse.milo.opcua.stack.core.types.structured.MonitoringParameters;
 import org.eclipse.milo.opcua.stack.core.types.structured.ReadValueId;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -24,7 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class NodeAccessMonitor {
-
+    private static final Logger logger = LoggerFactory.getLogger(NodeAccessMonitor.class);
     private final ApplicationConfig config;
     // 存储标签及其访问计数
     private final ConcurrentHashMap<String, AtomicInteger> tagAccessCount = new ConcurrentHashMap<>();
@@ -41,39 +44,44 @@ public class NodeAccessMonitor {
         this.config = config;
         this.subscribeClientsPool = subscribeClientsPool;
         this.redis = redis;
-        scheduler.scheduleAtFixedRate(this::checkHotTags, config.opcUa.client.hotData.hotDataThreshold, config.opcUa.client.hotData.hotDataCheckWindowMinutes, TimeUnit.MINUTES);
+        scheduler.scheduleAtFixedRate(this::checkHotTags, config.opcUa.client.hotData.hotDataCheckWindowMinutes, config.opcUa.client.hotData.hotDataCheckWindowMinutes, TimeUnit.MINUTES);
     }
 
     public void recordTagAccess(String group, String key) {
-        int count = tagAccessCount.computeIfAbsent(group+"."+key, k -> new AtomicInteger(0)).incrementAndGet();
-        System.out.println("recordTagAccess " + group+"."+key + ": " + count);
+        int count = tagAccessCount.computeIfAbsent(group + "." + key, k -> new AtomicInteger(0)).incrementAndGet();
+        logger.debug("recordTagAccess {}.{}: {}", group, key, count);
     }
 
     private void checkHotTags() {
-        System.out.println("---开始检查热点数据---");
+        logger.info("======================Starting check hot tags======================");
         int hotDataThreshold = config.opcUa.client.hotData.hotDataThreshold;
-
         // 扫描访问计数，更新热点数据列表
         tagAccessCount.forEach((tag, count) -> {
+            System.out.println("检查tag:"+tag);
             if (count.get() >= hotDataThreshold) {
-                System.out.println("热点数据：" + tag + " 访问次数：" + count.get() + " ,加入热点数据列表");
+                logger.info("Tag: {} ,request count: {} ,will insert into hot tag list", tag, count.get());
                 hotTags.add(tag);
             } else {
-                System.out.println("热点数据：" + tag + " 访问次数：" + count.get() + " ,移出热点数据列表");
+                logger.info("Tag: {} ,request count: {} ,will remove from hot tag list and reset counter", tag, count.get());
                 hotTags.remove(tag);
             }
             // 重置计数器
             count.set(0);
         });
+        //扫描上一次记录的全部热点数据，不在访问列表中的话也删除
+        hotTags.removeIf(tag -> tagAccessCount.isEmpty() || !tagAccessCount.containsKey(tag));
         // 取消不再是热点的数据订阅，并删除redis键值对
         for (String currentTag : currentSubscriptions) {
-            System.out.println("currentTag--"+currentTag);
             if (!hotTags.contains(currentTag)) {
-                unsubscribeTag(currentTag);
-                currentSubscriptions.remove(currentTag);
                 redis.delete(currentTag);
+                logger.info("Removed from Redis: {}", currentTag);
+                unsubscribeTag(currentTag);
+                logger.info("Removed from Subscribe: {}", currentTag);
+                currentSubscriptions.remove(currentTag);
+                logger.info("Removed {}", currentTag);
             }
         }
+        tagAccessCount.clear();
         // 订阅新的热点数据
         for (String tag : hotTags) {
             if (!currentSubscriptions.contains(tag)) {
@@ -82,11 +90,14 @@ public class NodeAccessMonitor {
             }
         }
         // 检查并重置
-        if (clientHandleCounter.get() > 10000L) {
+        if (clientHandleCounter.get() > 1000L) {
+            logger.debug("Reset counter");
             clientHandleCounter.set(1L);
             recycledHandles.clear();
             tagAccessCount.clear();
+            logger.info("Reset counter done");
         }
+        logger.info("======================Finished check hot tags======================");
     }
 
     public void shutdown() {
@@ -98,6 +109,15 @@ public class NodeAccessMonitor {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        logger.info("Shut down monitor...");
+        for (String tag : currentSubscriptions) {
+            unsubscribeTag(tag);
+        }
+        logger.info("Clear subscribeTag...");
+        for(String tag: hotTags){
+            redis.delete(tag);
+        }
+        logger.info("Clear redis...");
     }
 
     private static UInteger getRecycledOrNewClientHandle() {
@@ -106,18 +126,17 @@ public class NodeAccessMonitor {
     }
 
     private void onDataChanged(UaMonitoredItem item, DataValue value) {
-        System.out.println(item.getMonitoredItemId() + "-" + item.getReadValueId() + " Value changed: " + value.getValue().getValue());
+        logger.info("{}-{} Value changed: {}", item.getMonitoredItemId(), item.getReadValueId(), value.getValue().getValue());
         redis.write(item.getReadValueId().getNodeId().getIdentifier().toString(), value.getValue().getValue().toString());
     }
 
     private void subscribeTag(String tag) {
-        String ns = String.valueOf(config.opcUa.client.namespace);
         try {
             OpcUaClient client = subscribeClientsPool.getClient(tag);
-            UaSubscription subscription = client.getSubscriptionManager().createSubscription(500.0).get();
-            ReadValueId readValueId = new ReadValueId(NodeId.parse(ApplicationUtil.parseNodeParam(ns,tag)), AttributeId.Value.uid(), null, null);
+            UaSubscription subscription = client.getSubscriptionManager().createSubscription(config.opcUa.client.hotData.requestedPublishingIntervalMillis).get();
+            ReadValueId readValueId = new ReadValueId(NodeId.parse(ApplicationUtil.parseNodeParam(String.valueOf(config.opcUa.client.namespace), tag)), AttributeId.Value.uid(), null, null);
             MonitoringParameters parameters = new MonitoringParameters(
-                    getRecycledOrNewClientHandle(), 1000.0, null, UInteger.valueOf(1), true);
+                    getRecycledOrNewClientHandle(), config.opcUa.client.hotData.samplingIntervalMillis, null, UInteger.valueOf(1), true);
 
             MonitoredItemCreateRequest request = new MonitoredItemCreateRequest(
                     readValueId,
@@ -130,15 +149,16 @@ public class NodeAccessMonitor {
                     TimestampsToReturn.Both,
                     Collections.singletonList(request),
                     (item, id) -> {
-                        System.out.println("Setting value consumer for item: " + item.getReadValueId());
                         item.setValueConsumer(this::onDataChanged);
                     }
-            ).thenAccept(items -> items.forEach(monitoredItem -> System.out.println("Item created for nodeId=" + monitoredItem.getReadValueId().getNodeId()))).exceptionally(e -> {
-                e.printStackTrace();
+            ).thenAccept(items -> items.forEach(monitoredItem -> logger.info("Subscribed node: {}", monitoredItem.getReadValueId().getNodeId()))).exceptionally(e -> {
+                logger.error(e.getMessage());
+                logger.error(Arrays.toString(e.getStackTrace()));
                 return null;
             });
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error(e.getMessage());
+            logger.error(Arrays.toString(e.getStackTrace()));
         }
     }
 
@@ -150,9 +170,10 @@ public class NodeAccessMonitor {
             for (UaSubscription subscription : subscriptions) {
                 client.getSubscriptionManager().deleteSubscription(subscription.getSubscriptionId()).get();
             }
-            System.out.println("Unsubscribed tag: " + tag);
+            logger.info("Unsubscribed tag: {}", tag);
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error(e.getMessage());
+            logger.error(Arrays.toString(e.getStackTrace()));
         }
     }
 }

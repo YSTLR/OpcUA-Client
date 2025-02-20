@@ -14,12 +14,18 @@ import io.netty.handler.codec.http.*;
 import org.eclipse.milo.opcua.sdk.client.OpcUaClient;
 import org.eclipse.milo.opcua.stack.core.types.builtin.DataValue;
 import org.eclipse.milo.opcua.stack.core.types.builtin.NodeId;
+import org.eclipse.milo.opcua.stack.core.types.builtin.StatusCode;
+import org.eclipse.milo.opcua.stack.core.types.builtin.Variant;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 
-public class ReadServer {
+public class HttpServer {
+    private static final Logger logger = LoggerFactory.getLogger(HttpServer.class);
 
     private final OpcUaClientPool clientPool;
 
@@ -29,7 +35,7 @@ public class ReadServer {
 
     private final Redis redis;
 
-    public ReadServer(OpcUaClientPool clientPool, OpcUaSubscribeClientPool subscribeClientPool, Redis redis, ApplicationConfig config) {
+    public HttpServer(OpcUaClientPool clientPool, OpcUaSubscribeClientPool subscribeClientPool, Redis redis, ApplicationConfig config) {
         this.clientPool = clientPool;
         this.config = config;
         this.redis = redis;
@@ -40,7 +46,11 @@ public class ReadServer {
         );
     }
 
-    public void start() throws InterruptedException {
+    public void shutdownMonitor(){
+        this.monitor.shutdown();
+    }
+
+    public void start(long startTime) throws InterruptedException {
         EventLoopGroup bossGroup = new NioEventLoopGroup(1);
         EventLoopGroup workerGroup = new NioEventLoopGroup();
 
@@ -50,7 +60,7 @@ public class ReadServer {
                     .channel(NioServerSocketChannel.class)
                     .childHandler(new ChannelInitializer() {
                         @Override
-                        protected void initChannel(Channel channel){
+                        protected void initChannel(Channel channel) {
                             channel.pipeline().addLast(new HttpServerCodec());
                             channel.pipeline().addLast(new HttpObjectAggregator(65536));
                             channel.pipeline().addLast(new HttpRequestHandler(clientPool, config, monitor, redis));
@@ -58,7 +68,7 @@ public class ReadServer {
                     });
 
             ChannelFuture future = bootstrap.bind(config.httpServer.port).sync();
-            System.out.println("HTTP Server started on port " + config.httpServer.port);
+            logger.info("HTTP Server started on port {} in {}ms", config.httpServer.port, (System.currentTimeMillis() - startTime));
             future.channel().closeFuture().sync();
         } finally {
             bossGroup.shutdownGracefully();
@@ -80,7 +90,7 @@ public class ReadServer {
         }
 
         @Override
-        protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request){
+        protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) throws ExecutionException, InterruptedException {
             if (!request.method().equals(HttpMethod.GET)) {
                 sendResponse(ctx, "{\"error\": \"Only GET methods are supported\"}", HttpResponseStatus.METHOD_NOT_ALLOWED);
                 return;
@@ -91,7 +101,7 @@ public class ReadServer {
             if (path.equals(config.httpServer.readUrl)) {
                 handleReadRequest(ctx, decoder);
             } else if (path.equals(config.httpServer.writeUrl)) {
-//                handleWriteRequest(ctx, request);
+                handleWriteRequest(ctx, decoder);
             }
         }
 
@@ -116,11 +126,11 @@ public class ReadServer {
                 //监视器监控节点访问
                 monitor.recordTagAccess(group, key);
                 String redisValue = redis.read(group + "." + key);
-                if(redisValue!=null){
+                if (redisValue != null) {
+                    logger.info("(Cache  hit) Read {}.{}, result = {}",group,key,redisValue);
                     sendResponse(ctx, redisValue);
                     return;
                 }
-
                 OpcUaClient client = clientPool.borrowClient(config.opcUa.pool.borrowTimeoutMillis, TimeUnit.MILLISECONDS);
                 NodeId nodeId = NodeId.parse(ApplicationUtil.parseNodeParam(String.valueOf(config.opcUa.client.namespace), group, key));
 
@@ -129,8 +139,8 @@ public class ReadServer {
 
                 future.thenAccept(value -> {
                     if (value.getStatusCode().isGood()) {
-                        System.out.println(value.getValue());
-                        sendResponse(ctx, value.getValue().getValue().toString());
+                        logger.info("(Cache miss) Read {}.{}, result = {}",group,key,value.getValue().getValue().toString());
+                       sendResponse(ctx, value.getValue().getValue().toString());
                     } else {
                         sendResponse(ctx, "{\"error\": \"Failed to read node value\", \"status\": \"" + value.getStatusCode() + "\"}",
                                 HttpResponseStatus.INTERNAL_SERVER_ERROR);
@@ -148,10 +158,78 @@ public class ReadServer {
             }
         }
 
-//        private void handleWriteRequest(ChannelHandlerContext ctx, FullHttpRequest request) {
-//            // TODO: 实现写入逻辑
-//            sendResponse(ctx, "{\"message\": \"Write functionality is not implemented yet\"}", HttpResponseStatus.NOT_IMPLEMENTED);
-//        }
+        private void handleWriteRequest(ChannelHandlerContext ctx, QueryStringDecoder decoder) throws InterruptedException, ExecutionException {
+            String group = decoder.parameters().getOrDefault("group", null) != null
+                    ? decoder.parameters().get("group").get(0)
+                    : null;
+            if (group == null) {
+                sendResponse(ctx, "{\"error\": \"Missing 'group' parameter\"}", HttpResponseStatus.BAD_REQUEST);
+                return;
+            }
+            String key = decoder.parameters().getOrDefault("key", null) != null
+                    ? decoder.parameters().get("key").get(0)
+                    : null;
+
+            if (key == null) {
+                sendResponse(ctx, "{\"error\": \"Missing 'key' parameter\"}", HttpResponseStatus.BAD_REQUEST);
+                return;
+            }
+            String value = decoder.parameters().getOrDefault("value", null) != null
+                    ? decoder.parameters().get("value").get(0)
+                    : null;
+            if (value == null) {
+                sendResponse(ctx, "{\"error\": \"Missing 'value' parameter\"}", HttpResponseStatus.BAD_REQUEST);
+                return;
+            }
+            // TODO: 实现写入逻辑
+            String dataType = redis.read("Tag:"+group + "." + key);
+            DataValue dataValue = null;
+            switch (dataType){
+                case "Boolean":
+                    logger.info("Writing Boolean, value={}@{}",value,group + "." + key);
+                    Boolean flag = true;
+                    if(value.equals("True")||value.equals("true")||value.equals("1")||value.equals("TRUE")){
+                        flag=true;
+                    }
+                    if(value.equals("False")||value.equals("false")||value.equals("0")||value.equals("FALSE")){
+                        flag=false;
+                    }
+                    dataValue = new DataValue(new Variant(flag), null, null);
+                    break;
+//                case "DWord":
+//                    dataValue = new DataValue(new Variant(Integer.parseInt(value)), null, null);
+//                    break;
+                case "Float":
+                    logger.info("Writing Float, value={}@{}",value,group + "." + key);
+                    dataValue = new DataValue(new Variant(Float.parseFloat(value)), null, null);
+                    break;
+                case "Long":
+                    dataValue = new DataValue(new Variant(Long.parseLong(value)), null, null);
+                    break;
+                case "Short":
+                    dataValue = new DataValue(new Variant(Short.parseShort(value)), null, null);
+                    break;
+                case "String":
+                    logger.info("Writing String, value={}@{}",value,group + "." + key);
+                    dataValue = new DataValue(new Variant(value), null, null);
+                    break;
+//                case "Word":
+//                    dataValue = new DataValue(new Variant(Integer.parseInt(value)), null, null);
+//                    break;
+                default:
+                    logger.info("Writing {}, value={}@{}",dataType,value,group + "." + key);
+                    dataValue = new DataValue(new Variant(Integer.parseInt(value)), null, null);
+            }
+            OpcUaClient client = clientPool.borrowClient(config.opcUa.pool.borrowTimeoutMillis, TimeUnit.MILLISECONDS);
+            NodeId nodeId = NodeId.parse(ApplicationUtil.parseNodeParam(String.valueOf(config.opcUa.client.namespace), group, key));
+            StatusCode statusCode = client.writeValue(nodeId, dataValue).get();
+            if (statusCode.isGood()) {
+                sendResponse(ctx, "{\"message\": \"Write to ("+group+key+") success, value = "+value+"\"}", HttpResponseStatus.OK);
+            } else {
+                System.out.println(statusCode);
+                sendResponse(ctx, "{\"message\": \"Write to ("+group+key+") failed, value = "+value+"\"}", HttpResponseStatus.INTERNAL_SERVER_ERROR);
+            }
+        }
 
         private void sendResponse(ChannelHandlerContext ctx, String content) {
             sendResponse(ctx, content, HttpResponseStatus.OK);
