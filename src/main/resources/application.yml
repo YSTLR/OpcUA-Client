@@ -1,9 +1,10 @@
 opc-ua:
   server:
-    endpoint: opc.tcp://10.177.241.73:49320
+    endpoint: opc.tcp://10.177.241.64:49320
     security-policy: none
     username: OPCUA
     password: 123456
+    main-tag-client: false
   client:
     namespace: 2
     application-name: OpcUaClientPool
@@ -25,8 +26,10 @@ http-server:
     port: 6112
     read-url: /App/Get
     write-url: /App/Set
+    setNumber-url: /App/SetNumber
+    setBool-url: /App/SetBool
 redis:
-    host: 127.0.0.1
+    host: 10.177.241.69
     port: 6379
     password: 123456
     timeout-millis: 2000

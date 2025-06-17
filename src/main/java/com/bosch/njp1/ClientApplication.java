@@ -54,14 +54,19 @@ public class ClientApplication {
         );
         logger.info("Finished: Build Redis client");
 
-        ServerTagCache.init(
-                config.database.url,
-                config.database.userName,
-                config.database.password,
-                config.database.initSql,
-                redis
-        );
-        logger.info("Finished: Init Tag Datatype");
+        if(config.opcUa.server.mainTagClient){
+            ServerTagCache.init(
+                    config.database.url,
+                    config.database.userName,
+                    config.database.password,
+                    config.database.initSql,
+                    redis
+            );
+            logger.info("Finished: Init Tag Datatype");
+        }else{
+            logger.info("Finished: Not Main Tag Client, Skip Init Tag Datatype");
+        }
+
 
         HttpServer httpServer = new HttpServer(pool, opcUaSubscribeClientPool, redis, config);
         logger.info("Finished: Setup OPC Reader Server");

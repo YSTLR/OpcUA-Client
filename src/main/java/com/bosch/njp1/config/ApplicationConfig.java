@@ -41,6 +41,8 @@ public class ApplicationConfig {
             public String securityPolicy;
             public String username;
             public String password;
+            @JsonProperty("main-tag-client")
+            public Boolean mainTagClient;
         }
 
         public static class Client {
@@ -88,6 +90,10 @@ public class ApplicationConfig {
         public String readUrl;
         @JsonProperty("write-url")
         public String writeUrl;
+        @JsonProperty("setNumber-url")
+        public String setNumberUrl;
+        @JsonProperty("setBool-url")
+        public String setBoolUrl;
     }
 
 

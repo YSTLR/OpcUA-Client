@@ -57,7 +57,6 @@ public class NodeAccessMonitor {
         int hotDataThreshold = config.opcUa.client.hotData.hotDataThreshold;
         // 扫描访问计数，更新热点数据列表
         tagAccessCount.forEach((tag, count) -> {
-            System.out.println("检查tag:"+tag);
             if (count.get() >= hotDataThreshold) {
                 logger.info("Tag: {} ,request count: {} ,will insert into hot tag list", tag, count.get());
                 hotTags.add(tag);

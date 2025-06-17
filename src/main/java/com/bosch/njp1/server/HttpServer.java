@@ -90,6 +90,21 @@ public class HttpServer {
         }
 
         @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+            logger.error("Unhandled exception caught in pipeline", cause);
+
+            FullHttpResponse response = new DefaultFullHttpResponse(
+                    HttpVersion.HTTP_1_1,
+                    HttpResponseStatus.INTERNAL_SERVER_ERROR
+            );
+            response.content().writeCharSequence("{\"error\": \"Internal Server Error\"}", java.nio.charset.StandardCharsets.UTF_8);
+            response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
+            response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, response.content().readableBytes());
+
+            ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+        }
+
+        @Override
         protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) throws ExecutionException, InterruptedException {
             if (!request.method().equals(HttpMethod.GET)) {
                 sendResponse(ctx, "{\"error\": \"Only GET methods are supported\"}", HttpResponseStatus.METHOD_NOT_ALLOWED);
@@ -102,6 +117,12 @@ public class HttpServer {
                 handleReadRequest(ctx, decoder);
             } else if (path.equals(config.httpServer.writeUrl)) {
                 handleWriteRequest(ctx, decoder);
+            } else if(path.equals(config.httpServer.setNumberUrl)){
+                handleWriteRequest(ctx, decoder);
+            } else if(path.equals(config.httpServer.setBoolUrl)){
+                handleWriteRequest(ctx, decoder);
+            }else{
+                sendResponse(ctx, "{\"error\": \"API not found\"}", HttpResponseStatus.NOT_FOUND);
             }
         }
 
@@ -159,75 +180,81 @@ public class HttpServer {
         }
 
         private void handleWriteRequest(ChannelHandlerContext ctx, QueryStringDecoder decoder) throws InterruptedException, ExecutionException {
-            String group = decoder.parameters().getOrDefault("group", null) != null
-                    ? decoder.parameters().get("group").get(0)
-                    : null;
-            if (group == null) {
-                sendResponse(ctx, "{\"error\": \"Missing 'group' parameter\"}", HttpResponseStatus.BAD_REQUEST);
-                return;
-            }
-            String key = decoder.parameters().getOrDefault("key", null) != null
-                    ? decoder.parameters().get("key").get(0)
-                    : null;
+            try {
+                String group = decoder.parameters().getOrDefault("group", null) != null
+                        ? decoder.parameters().get("group").get(0)
+                        : null;
+                if (group == null) {
+                    sendResponse(ctx, "{\"error\": \"Missing 'group' parameter\"}", HttpResponseStatus.BAD_REQUEST);
+                    return;
+                }
+                String key = decoder.parameters().getOrDefault("key", null) != null
+                        ? decoder.parameters().get("key").get(0)
+                        : null;
 
-            if (key == null) {
-                sendResponse(ctx, "{\"error\": \"Missing 'key' parameter\"}", HttpResponseStatus.BAD_REQUEST);
-                return;
-            }
-            String value = decoder.parameters().getOrDefault("value", null) != null
-                    ? decoder.parameters().get("value").get(0)
-                    : null;
-            if (value == null) {
-                sendResponse(ctx, "{\"error\": \"Missing 'value' parameter\"}", HttpResponseStatus.BAD_REQUEST);
-                return;
-            }
-            // TODO: 实现写入逻辑
-            String dataType = redis.read("Tag:"+group + "." + key);
-            DataValue dataValue = null;
-            switch (dataType){
-                case "Boolean":
-                    logger.info("Writing Boolean, value={}@{}",value,group + "." + key);
-                    Boolean flag = true;
-                    if(value.equals("True")||value.equals("true")||value.equals("1")||value.equals("TRUE")){
-                        flag=true;
-                    }
-                    if(value.equals("False")||value.equals("false")||value.equals("0")||value.equals("FALSE")){
-                        flag=false;
-                    }
-                    dataValue = new DataValue(new Variant(flag), null, null);
-                    break;
-//                case "DWord":
-//                    dataValue = new DataValue(new Variant(Integer.parseInt(value)), null, null);
-//                    break;
-                case "Float":
-                    logger.info("Writing Float, value={}@{}",value,group + "." + key);
-                    dataValue = new DataValue(new Variant(Float.parseFloat(value)), null, null);
-                    break;
-                case "Long":
-                    dataValue = new DataValue(new Variant(Long.parseLong(value)), null, null);
-                    break;
-                case "Short":
-                    dataValue = new DataValue(new Variant(Short.parseShort(value)), null, null);
-                    break;
-                case "String":
-                    logger.info("Writing String, value={}@{}",value,group + "." + key);
-                    dataValue = new DataValue(new Variant(value), null, null);
-                    break;
-//                case "Word":
-//                    dataValue = new DataValue(new Variant(Integer.parseInt(value)), null, null);
-//                    break;
-                default:
-                    logger.info("Writing {}, value={}@{}",dataType,value,group + "." + key);
-                    dataValue = new DataValue(new Variant(Integer.parseInt(value)), null, null);
-            }
-            OpcUaClient client = clientPool.borrowClient(config.opcUa.pool.borrowTimeoutMillis, TimeUnit.MILLISECONDS);
-            NodeId nodeId = NodeId.parse(ApplicationUtil.parseNodeParam(String.valueOf(config.opcUa.client.namespace), group, key));
-            StatusCode statusCode = client.writeValue(nodeId, dataValue).get();
-            if (statusCode.isGood()) {
-                sendResponse(ctx, "{\"message\": \"Write to ("+group+key+") success, value = "+value+"\"}", HttpResponseStatus.OK);
-            } else {
-                System.out.println(statusCode);
-                sendResponse(ctx, "{\"message\": \"Write to ("+group+key+") failed, value = "+value+"\"}", HttpResponseStatus.INTERNAL_SERVER_ERROR);
+                if (key == null) {
+                    sendResponse(ctx, "{\"error\": \"Missing 'key' parameter\"}", HttpResponseStatus.BAD_REQUEST);
+                    return;
+                }
+                String value = decoder.parameters().getOrDefault("value", null) != null
+                        ? decoder.parameters().get("value").get(0)
+                        : null;
+                if (value == null) {
+                    sendResponse(ctx, "{\"error\": \"Missing 'value' parameter\"}", HttpResponseStatus.BAD_REQUEST);
+                    return;
+                }
+                //实现写入逻辑
+                String dataType = redis.read("Tag:"+group + "." + key);
+                DataValue dataValue = null;
+                if(dataType.isEmpty()){
+                    logger.info("Datatype is null, key = {}",group + "." + key);
+                }
+                switch (dataType){
+                    case "Boolean":
+                        logger.info("Writing Boolean, type@ {} ,value={}@{}",dataType,value,group + "." + key);
+                        Boolean flag = true;
+                        if(value.equals("True")||value.equals("true")||value.equals("1")||value.equals("TRUE")){
+                            flag=true;
+                        }
+                        if(value.equals("False")||value.equals("false")||value.equals("0")||value.equals("FALSE")){
+                            flag=false;
+                        }
+                        dataValue = new DataValue(new Variant(flag), null, null);
+                        break;
+    //                case "DWord":
+    //                    dataValue = new DataValue(new Variant(Integer.parseInt(value)), null, null);
+    //                    break;
+                    case "Float":
+                        logger.info("Writing Float, value={}@{}",value,group + "." + key);
+                        dataValue = new DataValue(new Variant(Float.parseFloat(value)), null, null);
+                        break;
+                    case "Long":
+                        dataValue = new DataValue(new Variant(Long.parseLong(value)), null, null);
+                        break;
+                    case "Short":
+                        dataValue = new DataValue(new Variant(Short.parseShort(value)), null, null);
+                        break;
+                    case "String":
+                        logger.info("Writing String, value={}@{}",value,group + "." + key);
+                        dataValue = new DataValue(new Variant(value), null, null);
+                        break;
+    //                case "Word":
+    //                    dataValue = new DataValue(new Variant(Integer.parseInt(value)), null, null);
+    //                    break;
+                    default:
+                        logger.info("Writing {}, value={}@{}",dataType,value,group + "." + key);
+                        dataValue = new DataValue(new Variant(Integer.parseInt(value)), null, null);
+                }
+                OpcUaClient client = clientPool.borrowClient(config.opcUa.pool.borrowTimeoutMillis, TimeUnit.MILLISECONDS);
+                NodeId nodeId = NodeId.parse(ApplicationUtil.parseNodeParam(String.valueOf(config.opcUa.client.namespace), group, key));
+                StatusCode statusCode = client.writeValue(nodeId, dataValue).get();
+                if (statusCode.isGood()) {
+                    sendResponse(ctx, "{\"message\": \"Write to ("+group+key+") success, value = "+value+"\"}", HttpResponseStatus.OK);
+                } else {
+                    sendResponse(ctx, "{\"message\": \"Write to ("+group+key+") failed, value = "+value+"\"}", HttpResponseStatus.INTERNAL_SERVER_ERROR);
+                }
+            } catch (Exception e) {
+                sendResponse(ctx, null, HttpResponseStatus.INTERNAL_SERVER_ERROR);
             }
         }
 

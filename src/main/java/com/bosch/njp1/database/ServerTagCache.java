@@ -1,13 +1,16 @@
 package com.bosch.njp1.database;
 
 import com.bosch.njp1.redis.Redis;
+import org.apache.log4j.Logger;
 
 import java.sql.*;
 import java.util.concurrent.Executors;
 
 public class ServerTagCache {
 
-    public static Connection getConnection(String url,String username,String password) throws SQLException {
+    private static final Logger log = Logger.getLogger(ServerTagCache.class);
+
+    public static Connection getConnection(String url, String username, String password) throws SQLException {
         return DriverManager.getConnection(url, username, password);
     }
 
@@ -24,6 +27,7 @@ public class ServerTagCache {
                 redis.write("Tag:"+Channel_Name + "." + Machine_Name + "." + Tag_Name, Data_Type);
             }
         } catch (SQLException e) {
+            log.error(e.getMessage());
             e.printStackTrace();
         }
 
